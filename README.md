@@ -45,6 +45,24 @@
 
 ![界面](docs/preview.png)
 
+## 每日写入量流水
+
+程序会把每天的写入量记到 `%LOCALAPPDATA%\DiskWriteMonitor\daily-writes.csv`，每天每块盘一行：
+
+```
+date,disk,model,letters,bytes,gb,monitoredHours
+2026-10-25,0,Fanxiang S100PRO,C:、D:,18938880,0.02,0.034
+2026-10-25,1,NVMe Asgard AN2 1TNVMe-M.2/80,E:,319488,0.00,0.034
+```
+
+用途：SATA 固态的固件累计写入值不一定可信（廉价盘常把 SMART 241 记成别的单位），
+拿不到「出厂至今总量」时，就靠这个文件挂几周，用 `gb` 的日均值估算这块盘还能撑多久。
+
+**注意 `monitoredHours` 字段**：只统计本工具**运行期间**的写入量，关机/退出期间不计。
+别把「跑了 3 小时的 20GB」当成「一整天 20GB」，用 `gb ÷ monitoredHours` 才是真实速度。
+
+写盘节奏：每 5 分钟一次 + 退出时一次；同日覆盖同一行，跨天自动结转，临时文件原子替换。
+
 ## 系统要求
 
 - Windows 10 1809 及以上 / Windows 11，64 位

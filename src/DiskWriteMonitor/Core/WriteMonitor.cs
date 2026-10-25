@@ -91,6 +91,12 @@ public sealed class WriteMonitor : INotifyPropertyChanged
     /// <summary>本次会话全系统写入字节（仅在没有按盘数据时兜底）</summary>
     private double _sessionTotalBytes;
 
+    // 每日写入流水
+    private string _dailyDate = string.Empty;
+    private readonly Dictionary<int, long> _dailyBytes = new();
+    private double _dailySeconds;
+    private int _dailyTicks;
+
     /// <summary>每块盘各存一份会话状态，切换磁盘只换显示，不重置任何一块的数据</summary>
     private readonly Dictionary<int, DiskSession> _sessions = new();
     private readonly DiskSession _fallbackSession = new();
@@ -115,7 +121,87 @@ public sealed class WriteMonitor : INotifyPropertyChanged
 
         foreach (var disk in Disks) _sessions[disk.Number] = new DiskSession();
 
+        LoadDaily();
         RebuildChips();
+    }
+
+    private void LoadDaily()
+    {
+        var today = DateTime.Today.ToString("yyyy-MM-dd");
+
+        // 上次运行跨天了：把那天残留的数据先落盘，别丢
+        if (!string.IsNullOrEmpty(_settings.DailyDate) && _settings.DailyDate != today)
+        {
+            var carried = new Dictionary<int, long>();
+            foreach (var (key, value) in _settings.DailyBytes)
+                if (int.TryParse(key, out var number)) carried[number] = value;
+
+            FlushDaily(_settings.DailyDate, carried, _settings.DailySeconds);
+            _settings.DailyBytes.Clear();
+            _settings.DailySeconds = 0;
+        }
+
+        _dailyDate = today;
+
+        foreach (var (key, value) in _settings.DailyBytes)
+            if (int.TryParse(key, out var number)) _dailyBytes[number] = value;
+
+        _dailySeconds = _settings.DailySeconds;
+    }
+
+    private void FlushDaily(string date, Dictionary<int, long> bytes, double seconds)
+    {
+        var rows = new List<DailyWriteLog.Row>();
+
+        foreach (var (number, value) in bytes)
+        {
+            if (value <= 0) continue;
+            var disk = Disks.FirstOrDefault(d => d.Number == number);
+            rows.Add(new DailyWriteLog.Row
+            {
+                Date = date,
+                Disk = number,
+                Model = disk?.Model ?? string.Empty,
+                Letters = disk?.Letters ?? string.Empty,
+                Bytes = value,
+                Hours = Math.Round(seconds / 3600.0, 3)
+            });
+        }
+
+        if (rows.Count > 0) DailyWriteLog.Upsert(rows);
+    }
+
+    /// <summary>累计当天写入、跨天结转、每约 5 分钟落一次盘（避免每分钟写文件）</summary>
+    private void TickDaily(double dt)
+    {
+        var today = DateTime.Today.ToString("yyyy-MM-dd");
+        if (today != _dailyDate)
+        {
+            FlushDaily(_dailyDate, _dailyBytes, _dailySeconds);
+            _dailyBytes.Clear();
+            _dailySeconds = 0;
+            _dailyDate = today;
+        }
+
+        _dailySeconds += dt;
+        _dailyTicks++;
+
+        if (_dailyTicks < 300) return;
+
+        _dailyTicks = 0;
+        PersistDaily();
+    }
+
+    private void PersistDaily()
+    {
+        if (_dailyBytes.Count == 0 && _dailySeconds < 1) return;
+
+        _settings.DailyDate = _dailyDate;
+        _settings.DailyBytes = _dailyBytes.ToDictionary(kv => kv.Key.ToString(), kv => kv.Value);
+        _settings.DailySeconds = _dailySeconds;
+        _settings.Save();
+
+        FlushDaily(_dailyDate, _dailyBytes, _dailySeconds);
     }
 
     private sealed class DiskSession
@@ -199,6 +285,9 @@ public sealed class WriteMonitor : INotifyPropertyChanged
         _timer = null;
         _rateCounter?.Dispose();
         _rateCounter = null;
+
+        // 退出时把当天流水落盘，否则今天的数据会停在内存里
+        PersistDaily();
     }
 
     // ---------------- 采样 ----------------
@@ -253,6 +342,7 @@ public sealed class WriteMonitor : INotifyPropertyChanged
     {
         _prevTime = now;
         _hasBaseline = true;
+        TickDaily(dt);
 
         if (rateOk && raws.Count > 0)
         {
@@ -276,6 +366,10 @@ public sealed class WriteMonitor : INotifyPropertyChanged
                 each.SessionBytes = cumulative >= each.RawFirst ? cumulative - each.RawFirst : 0;
                 each.LastRate = delta / 1e6 / dt;
                 if (each.LastRate > each.Peak) each.Peak = each.LastRate;
+
+                // 每日流水：只累加真实落盘增量
+                if (delta > 0)
+                    _dailyBytes[number] = (_dailyBytes.TryGetValue(number, out var dayAcc) ? dayAcc : 0) + delta;
             }
 
             PushHistory(Current, Current.LastRate);
@@ -640,7 +734,8 @@ public sealed class WriteMonitor : INotifyPropertyChanged
     /// <summary>调试用：每块盘的自开机累计 / 会话量 / 速率，便于和系统计数器对账</summary>
     public string DiskDebugText => string.Join(" | ", _sessions
         .OrderBy(kv => kv.Key)
-        .Select(kv => $"d{kv.Key} boot={kv.Value.BootBytes} sess={(long)kv.Value.SessionBytes} rate={kv.Value.LastRate:F3}"));
+        .Select(kv => $"d{kv.Key} boot={kv.Value.BootBytes} sess={(long)kv.Value.SessionBytes} rate={kv.Value.LastRate:F3}"))
+        + $" || daily={_dailyDate}/{_dailySeconds:F1}s bytes={string.Join(",", _dailyBytes.Select(kv => kv.Key + ":" + kv.Value))}";
 
     public string ProcessCountText { get; private set; } = "0 个进程";
 
