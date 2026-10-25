@@ -14,9 +14,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- 图标复用 macOS 版仓库里的 AppIcon.iconset，合成 5 个尺寸的 ico -->
     <ApplicationIcon>resources\app.ico</ApplicationIcon>
-    <Version>2.4.0</Version>
-    <AssemblyVersion>2.4.0.0</AssemblyVersion>
-    <FileVersion>2.4.0.0</FileVersion>
+    <Version>2.4.2</Version>
+    <AssemblyVersion>2.4.2.0</AssemblyVersion>
+    <FileVersion>2.4.2.0</FileVersion>
     <Product>磁盘写入量</Product>
     <AssemblyTitle>磁盘写入量</AssemblyTitle>
     <Company>ArchMageLaLa</Company>
