@@ -170,7 +170,7 @@
                             <TextBlock Text="累计写入" Style="{StaticResource Caption}" FontSize="10" />
                             <TextBlock Text="{Binding TotalText}" Style="{StaticResource Body}"
                                        FontSize="15" Margin="0,4,0,0" />
-                            <TextBlock Text="{Binding UsedCaption}" Style="{StaticResource Caption}"
+                            <TextBlock Text="{Binding TotalCaption}" Style="{StaticResource Caption}"
                                        FontSize="9" Margin="0,2,0,0" />
                         </StackPanel>
                     </Border>

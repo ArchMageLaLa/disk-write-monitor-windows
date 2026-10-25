@@ -153,7 +153,8 @@ public partial class App : Application
                 "  peak=" + _monitor?.PeakText +
                 "  temp=" + _monitor?.TempText +
                 "  total=" + _monitor?.TotalText,
-                "rates(MB/s)=" + _monitor?.RateHistoryText
+                "rates(MB/s)=" + _monitor?.RateHistoryText,
+                "disks=" + _monitor?.DiskDebugText
             };
 
             if (_monitor is not null)

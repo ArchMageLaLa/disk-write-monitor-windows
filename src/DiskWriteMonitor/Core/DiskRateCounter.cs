@@ -16,6 +16,22 @@ public sealed class DiskRateCounter : IDisposable
     /// </summary>
     private const uint PdhFmtDouble = 0x00000200;
 
+    /// <summary>
+    /// PDH_RAW_COUNTER_ITEM_W 在 x64 下的布局：
+    ///   szName            offset 0   (8)
+    ///   PDH_RAW_COUNTER   offset 8
+    ///     CStatus         +0  (4)
+    ///     FILETIME        +4  (8)  -> 到 +12
+    ///     FirstValue      +16 (8)  -> 但因为 LONGLONG 要 8 字节对齐，实际在 +16，
+    ///                                 合起来就是 item 内的 offset 24
+    ///     SecondValue     +24
+    ///     MultiCount      +32
+    ///   PDH_RAW_COUNTER 总长 40（含尾部对齐），所以 item 步长 = 8 + 40 = 48
+    /// 上一版把 FirstValue 写成 offset 16（即 TimeStamp 区域），读出来自然是垃圾。
+    /// </summary>
+    private const int RawItemStride = 48;
+    private const int RawFirstValueOffset = 24;
+
     private IntPtr _query;
     private IntPtr _counter;
     private readonly bool _ready;
@@ -34,16 +50,43 @@ public sealed class DiskRateCounter : IDisposable
     public bool IsReady => _ready;
 
     /// <summary>
-    /// 一次采集拿回所有物理磁盘的写入速率（字节/秒），键为磁盘号。
-    /// 所有盘同时采集，切换磁盘时各盘的会话累计才不会断档。
-    /// 注：会话累计量由速率 × 时间间隔积分得到，1 秒采样下持续写入准确，
-    /// 极短的写入爆发可能少计 —— 这是 perfmon 速率计数器本身的粒度限制。
+    /// 一次采集同时给出两套数据：
+    ///   cumulative —— 自开机累计写入字节（raw FirstValue，精确，做差即得速率和会话量）
+    ///   rates      —— PDH 算好的字节/秒（raw 读失败时兜底）
     /// </summary>
-    public bool TryReadAll(out Dictionary<int, double> rates)
+    public bool TryReadAll(out Dictionary<int, long> cumulative, out Dictionary<int, double> rates)
     {
+        cumulative = new Dictionary<int, long>();
         rates = new Dictionary<int, double>();
         if (!_ready) return false;
         if (PdhCollectQueryData(_query) != 0) return false;
+
+        // ---- 原始累计字节（精确来源）----
+        var rawSize = 0u;
+        PdhGetRawCounterArrayW(_counter, ref rawSize, out _, IntPtr.Zero);
+        if (rawSize > 0)
+        {
+            var rawBuffer = Marshal.AllocHGlobal((int)rawSize);
+            try
+            {
+                if (PdhGetRawCounterArrayW(_counter, ref rawSize, out var rawCount, rawBuffer) == 0)
+                {
+                    for (var i = 0; i < rawCount; i++)
+                    {
+                        var item = rawBuffer + i * RawItemStride;
+                        var name = Marshal.PtrToStringUni(Marshal.ReadIntPtr(item)) ?? string.Empty;
+                        if (!TryParseDiskNumber(name, out var number)) continue;
+
+                        var first = Marshal.ReadInt64(item, RawFirstValueOffset);
+                        if (first > 0 && first < long.MaxValue / 2) cumulative[number] = first;
+                    }
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(rawBuffer);
+            }
+        }
 
         // 第一次调用只用来探查需要多大缓冲，必然返回 PDH_MORE_DATA，不能当成失败
         var size = 0u;
@@ -75,8 +118,12 @@ public sealed class DiskRateCounter : IDisposable
             Marshal.FreeHGlobal(buffer);
         }
 
-        return rates.Count > 0;
+        return cumulative.Count > 0 || rates.Count > 0;
     }
+
+    [DllImport("pdh.dll", CharSet = CharSet.Unicode)]
+    private static extern uint PdhGetRawCounterArrayW(
+        IntPtr counter, ref uint bufferSize, out uint itemCount, IntPtr buffer);
 
     /// <summary>实例名形如 "0 c: d:"、"1 e:"、"_total"，取空格前那段转成磁盘号。</summary>
     private static bool TryParseDiskNumber(string instanceName, out int number)

@@ -88,7 +88,7 @@ public sealed class WriteMonitor : INotifyPropertyChanged
     private readonly Dictionary<string, ProcRow> _rowCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<string> _selected = new();
 
-    /// <summary>本次会话全系统写入字节（Σ 所有进程增量，精确值）</summary>
+    /// <summary>本次会话全系统写入字节（仅在没有按盘数据时兜底）</summary>
     private double _sessionTotalBytes;
 
     /// <summary>每块盘各存一份会话状态，切换磁盘只换显示，不重置任何一块的数据</summary>
@@ -120,12 +120,24 @@ public sealed class WriteMonitor : INotifyPropertyChanged
 
     private sealed class DiskSession
     {
+        /// <summary>本次会话该盘写入字节（由自开机累计字节做差，精确）</summary>
+        public double SessionBytes;
+
+        /// <summary>自开机该盘累计写入字节</summary>
+        public ulong BootBytes;
+
         public double Peak;
         public double LastRate;
         public ulong TotalBytes;
+        public bool FirmwareReliable;
         public int TemperatureC = -1;
         public byte Used;
         public readonly Queue<double> History = new();
+
+        // raw 累计字节的基线，用来算会话量与速率
+        public bool HasRaw;
+        public long RawFirst;
+        public long RawPrev;
     }
 
     private DiskSession Current =>
@@ -201,15 +213,16 @@ public sealed class WriteMonitor : INotifyPropertyChanged
             DiskHealth? health = null;
             if (Disk is not null) health = SmartReader.Read(Disk);
 
-            // 一次采集覆盖所有物理磁盘：所有盘的会话量同时累计，切换时不会断档
+            // 一次采集覆盖所有物理磁盘；raw 是自开机累计字节（精确），rates 仅作兜底
+            var raws = new Dictionary<int, long>();
             var rates = new Dictionary<int, double>();
-            var rateOk = _rateCounter is not null && _rateCounter.TryReadAll(out rates);
+            var rateOk = _rateCounter is not null && _rateCounter.TryReadAll(out raws, out rates);
 
             var procs = ProcessSampler.Snapshot(out var total, out var failed);
             var now = DateTime.Now;
 
             Application.Current?.Dispatcher.BeginInvoke(
-                new Action(() => Apply(health, rateOk, rates, procs, total, failed, now)));
+                new Action(() => Apply(health, rateOk, raws, rates, procs, total, failed, now)));
         }
         catch
         {
@@ -221,13 +234,13 @@ public sealed class WriteMonitor : INotifyPropertyChanged
         }
     }
 
-    private void Apply(DiskHealth? health, bool rateOk, Dictionary<int, double> rates,
-        Dictionary<int, ProcWrite> procs, int total, int failed, DateTime now)
+    private void Apply(DiskHealth? health, bool rateOk, Dictionary<int, long> raws,
+        Dictionary<int, double> rates, Dictionary<int, ProcWrite> procs, int total, int failed, DateTime now)
     {
         var dt = _hasBaseline ? Math.Clamp((now - _prevTime).TotalSeconds, 0.2, 10.0) : 1.0;
         if (dt <= 0) dt = 1.0;
 
-        ApplyDisk(health, rateOk, rates, now, dt);
+        ApplyDisk(health, rateOk, raws, rates, now, dt);
         ApplyProcesses(procs, now, dt, total, failed);
 
         LastUpdateText = "更新于 " + Fmt.Time(now);
@@ -235,20 +248,50 @@ public sealed class WriteMonitor : INotifyPropertyChanged
         RaiseAll();
     }
 
-    private void ApplyDisk(DiskHealth? health, bool rateOk, Dictionary<int, double> rates,
-        DateTime now, double dt)
+    private void ApplyDisk(DiskHealth? health, bool rateOk, Dictionary<int, long> raws,
+        Dictionary<int, double> rates, DateTime now, double dt)
     {
         _prevTime = now;
         _hasBaseline = true;
 
-        if (rateOk)
+        if (rateOk && raws.Count > 0)
         {
-            // 所有盘一起累计：切走再切回来，数字是连续的
+            // 精确路径：自开机累计字节做差，同时得到会话量与速率
+            foreach (var (number, cumulative) in raws)
+            {
+                if (!_sessions.TryGetValue(number, out var each)) continue;
+
+                each.BootBytes = (ulong)cumulative;
+
+                if (!each.HasRaw)
+                {
+                    each.HasRaw = true;
+                    each.RawFirst = cumulative;
+                    each.RawPrev = cumulative;
+                    continue;
+                }
+
+                var delta = cumulative >= each.RawPrev ? cumulative - each.RawPrev : 0;
+                each.RawPrev = cumulative;
+                each.SessionBytes = cumulative >= each.RawFirst ? cumulative - each.RawFirst : 0;
+                each.LastRate = delta / 1e6 / dt;
+                if (each.LastRate > each.Peak) each.Peak = each.LastRate;
+            }
+
+            PushHistory(Current, Current.LastRate);
+
+            StatusLevel = 0;
+            StatusText = "实时";
+        }
+        else if (rateOk && rates.Count > 0)
+        {
+            // 兜底路径：raw 读失败时退回 PDH 的速率，会话量靠积分（精度差，界面会标注）
             foreach (var (number, bytesPerSecond) in rates)
             {
                 if (!_sessions.TryGetValue(number, out var each)) continue;
 
                 each.LastRate = bytesPerSecond / 1e6;
+                each.SessionBytes += bytesPerSecond * dt;
                 if (each.LastRate > each.Peak) each.Peak = each.LastRate;
             }
 
@@ -285,6 +328,7 @@ public sealed class WriteMonitor : INotifyPropertyChanged
             case DiskHealthStatus.Ok:
                 session.TemperatureC = health.TemperatureC;
                 session.Used = health.PercentageUsed;
+                session.FirmwareReliable = health.FirmwareReliable;
                 session.TotalBytes = health.FirmwareReliable ? health.TotalBytes : 0;
                 StatusMessage = health.FirmwareReliable ? string.Empty : health.Message;
                 ShowPermissionBar = false;
@@ -569,13 +613,21 @@ public sealed class WriteMonitor : INotifyPropertyChanged
     public string RateValue => Fmt.Rate(CurrentRate).Value;
     public string RateUnit => Fmt.Rate(CurrentRate).Unit;
 
-    /// <summary>本次会话全系统写入：Σ 所有进程的精确增量，与选中的磁盘无关</summary>
-    public double SessionBytes => _sessionTotalBytes;
+    /// <summary>当前选中磁盘的本次会话写入量（按盘统计，精确）</summary>
+    public double SessionBytes => Current.HasRaw ? Current.SessionBytes : _sessionTotalBytes;
     public string SessionText => Fmt.Bytes(SessionBytes);
-    public string SessionCaption => "全系统合计";
+    public string SessionCaption => Current.HasRaw ? "当前磁盘" : "全系统合计";
 
-    public double TotalBytes => Current.TotalBytes;
+    /// <summary>
+    /// 固件累计写入（出厂至今）。固件值不可信时（如廉价 SATA 盘）退回"自开机累计"，
+    /// 至少还有一个可用的量级参考，而不是显示一串破折号。
+    /// </summary>
+    public double TotalBytes => Current.FirmwareReliable ? Current.TotalBytes : Current.BootBytes;
     public string TotalText => TotalBytes > 0 ? Fmt.Bytes(TotalBytes) : "—";
+
+    public string TotalCaption => Current.FirmwareReliable
+        ? (PercentageUsed > 0 ? $"出厂至今 · 已用寿命 {PercentageUsed}%" : "出厂至今")
+        : "自开机累计";
 
     public string PeakText => Fmt.RateText(Current.Peak);
 
@@ -584,7 +636,11 @@ public sealed class WriteMonitor : INotifyPropertyChanged
 
     public byte PercentageUsed => Current.Used;
     public string UsedText => PercentageUsed > 0 ? PercentageUsed + " %" : "—";
-    public string UsedCaption => PercentageUsed > 0 ? $"已用寿命 {PercentageUsed}%" : "已用寿命 —";
+
+    /// <summary>调试用：每块盘的自开机累计 / 会话量 / 速率，便于和系统计数器对账</summary>
+    public string DiskDebugText => string.Join(" | ", _sessions
+        .OrderBy(kv => kv.Key)
+        .Select(kv => $"d{kv.Key} boot={kv.Value.BootBytes} sess={(long)kv.Value.SessionBytes} rate={kv.Value.LastRate:F3}"));
 
     public string ProcessCountText { get; private set; } = "0 个进程";
 
@@ -609,6 +665,7 @@ public sealed class WriteMonitor : INotifyPropertyChanged
         Raise(nameof(SessionCaption));
         Raise(nameof(TotalBytes));
         Raise(nameof(TotalText));
+        Raise(nameof(TotalCaption));
         Raise(nameof(PeakText));
         Raise(nameof(TemperatureC));
         Raise(nameof(TempText));
@@ -616,7 +673,6 @@ public sealed class WriteMonitor : INotifyPropertyChanged
         Raise(nameof(UsedText));
         Raise(nameof(ProcessCountText));
         Raise(nameof(ProcessSectionTitle));
-        Raise(nameof(UsedCaption));
         Raise(nameof(LastUpdateText));
         Raise(nameof(StatusLevel));
         Raise(nameof(StatusText));
