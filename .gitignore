@@ -1,0 +1,22 @@
+# 构建产物
+bin/
+obj/
+dist/
+publish/
+
+# 探针报告（本机数据，不进仓库）
+tools/probe/report-*.txt
+tools/probe/report-*.json
+
+# 调试导出
+docs/rows-dump*.txt
+docs/preview-admin.png
+
+# IDE
+.vs/
+*.user
+*.suo
+
+# 系统
+Thumbs.db
+desktop.ini

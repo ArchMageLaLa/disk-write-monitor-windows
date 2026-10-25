@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <!-- 托盘图标用 WinForms 的 NotifyIcon，比手写 Shell_NotifyIcon 稳
+         （官方支持 UseWPF + UseWindowsForms 同时为 true） -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>DiskWriteMonitor</AssemblyName>
+    <RootNamespace>DiskWriteMonitor</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 图标复用 macOS 版仓库里的 AppIcon.iconset，合成 5 个尺寸的 ico -->
+    <ApplicationIcon>resources\app.ico</ApplicationIcon>
+    <Version>2.4.0</Version>
+    <AssemblyVersion>2.4.0.0</AssemblyVersion>
+    <FileVersion>2.4.0.0</FileVersion>
+    <Product>磁盘写入量</Product>
+    <AssemblyTitle>磁盘写入量</AssemblyTitle>
+    <Company>ArchMageLaLa</Company>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 同一个 ico 也作为 WPF 资源，标题栏左侧那张小图就用它 -->
+    <Resource Include="resources\app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- UseWindowsForms 会自动带上 System.Drawing / System.Windows.Forms 的隐式 using，
+         它们和 WPF 的 Brush / Size / Color / Application 全部二义，这里移除。
+         WinForms 只在 App.xaml.cs 里通过别名用 NotifyIcon。 -->
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+</Project>

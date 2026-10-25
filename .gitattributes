@@ -1,0 +1,12 @@
+# 统一换行符，避免 Windows/Linux 协作时整个仓库被当成改动
+* text=auto eol=lf
+
+# 批处理必须是 CRLF，否则双击运行可能出错
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制
+*.png binary
+*.ico binary
+*.exe binary
