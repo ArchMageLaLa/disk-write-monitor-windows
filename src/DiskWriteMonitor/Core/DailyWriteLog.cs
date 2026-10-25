@@ -28,7 +28,8 @@ public static class DailyWriteLog
         public double Hours;
     }
 
-    public static string FilePath => Path.Combine(AppSettings.Dir, "daily-writes.csv");
+    /// <summary>CSV 位置跟随设置里的数据目录，默认在 %LOCALAPPDATA%\DiskWriteMonitor</summary>
+    public static string FilePath => Path.Combine(AppSettings.ResolvedDataDir, "daily-writes.csv");
 
     public static List<Row> Load()
     {
@@ -82,7 +83,7 @@ public static class DailyWriteLog
                        .TakeLast(MaxRows)
                        .ToList();
 
-            Directory.CreateDirectory(AppSettings.Dir);
+            Directory.CreateDirectory(AppSettings.ResolvedDataDir);
 
             var sb = new StringBuilder();
             sb.AppendLine(Header);

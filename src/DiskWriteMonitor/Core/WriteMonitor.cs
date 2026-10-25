@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Media;
@@ -123,6 +124,55 @@ public sealed class WriteMonitor : INotifyPropertyChanged
 
         LoadDaily();
         RebuildChips();
+    }
+
+    public void FlushDailyNow() => PersistDaily();
+
+    /// <summary>当前数据文件目录（界面提示用）</summary>
+    public string DataDirPath => AppSettings.ResolvedDataDir;
+
+    /// <summary>
+    /// 更改数据文件存放目录。已有的 CSV 会**复制**到新位置，原文件保留不删
+    /// （用户自己决定什么时候清理），随后立即把当天数据写到新位置。
+    /// </summary>
+    public bool ChangeDataDir(string dir)
+    {
+        if (string.IsNullOrWhiteSpace(dir)) return false;
+
+        string target;
+        try
+        {
+            Directory.CreateDirectory(dir);
+            target = Path.GetFullPath(dir);
+        }
+        catch
+        {
+            return false;
+        }
+
+        var current = AppSettings.ResolvedDataDir;
+        if (string.Equals(Path.GetFullPath(current).TrimEnd('\\'), target.TrimEnd('\\'),
+                StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // 老文件搬一份过去；新位置已有同名文件就不覆盖
+        try
+        {
+            var oldCsv = Path.Combine(current, "daily-writes.csv");
+            var newCsv = Path.Combine(target, "daily-writes.csv");
+            if (File.Exists(oldCsv) && !File.Exists(newCsv)) File.Copy(oldCsv, newCsv);
+        }
+        catch
+        {
+            // 复制失败不影响切换，历史数据还留在旧位置
+        }
+
+        _settings.DataDir = target;
+        _settings.Save();      // Save 内部会重新解析路径
+        PersistDaily();        // 立刻把当天数据写到新位置
+
+        Raise(nameof(DataDirPath));
+        return true;
     }
 
     private void LoadDaily()

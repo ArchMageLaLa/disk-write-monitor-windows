@@ -267,6 +267,10 @@
                                   VerticalAlignment="Center" Checked="AutoStart_Changed" Unchecked="AutoStart_Changed">
                             <TextBlock Text="开机自启" Style="{StaticResource Caption}" />
                         </CheckBox>
+                        <Button x:Name="DataDirButton" Style="{StaticResource FlatButton}" Margin="10,0,0,0"
+                                Padding="6,3" FontSize="10" VerticalAlignment="Center"
+                                Content="数据目录" Click="DataDir_Click"
+                                ToolTipService.ShowDuration="20000" />
                     </StackPanel>
                     <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center">
                         <TextBlock Text="{Binding DataSourceText}" Style="{StaticResource Caption}"

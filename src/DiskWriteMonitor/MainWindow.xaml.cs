@@ -35,7 +35,41 @@ public partial class MainWindow : Window
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         AutoStartCheck.IsChecked = AutoStart.IsEnabled();
+        UpdateDataDirHint();
         RefreshBars();
+    }
+
+    private void UpdateDataDirHint() =>
+        DataDirButton.ToolTip = "数据文件存放目录：\n" + _monitor.DataDirPath +
+                                "\n\n点击更改。切换后原位置的文件会保留，不会删除。";
+
+    private void DataDir_Click(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "选择 daily-writes.csv 的存放目录",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true
+        };
+
+        var current = _monitor.DataDirPath;
+        if (System.IO.Directory.Exists(current)) dialog.SelectedPath = current;
+
+        if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+
+        if (!_monitor.ChangeDataDir(dialog.SelectedPath))
+        {
+            MessageBox.Show(this, "目录未改变，或者该目录无法写入（盘符不存在 / 没有权限）。",
+                "磁盘写入量", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        UpdateDataDirHint();
+        MessageBox.Show(this,
+            "数据文件已切换到：\n" + _monitor.DataDirPath +
+            "\n\n旧位置的同名文件仍然保留，需要的话可以自行删除。" +
+            "\nstate.json（几行配置）始终留在 %LOCALAPPDATA%\\DiskWriteMonitor。",
+            "磁盘写入量", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     public void ForceClose()
