@@ -58,7 +58,7 @@ public sealed class UpdateChecker
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
             using var resp = await Http.GetAsync(
-                "https://api.github.com/repos/ArchMageLaLa/disk-write-monitor/releases/latest", cts.Token);
+                "https://api.github.com/repos/ArchMageLaLa/disk-write-monitor-windows/releases/latest", cts.Token);
 
             if (!resp.IsSuccessStatusCode) return;
 
@@ -72,6 +72,22 @@ public sealed class UpdateChecker
             var tag = tagProp.GetString() ?? string.Empty;
             var url = urlProp.GetString() ?? string.Empty;
             if (string.IsNullOrEmpty(tag) || string.IsNullOrEmpty(url)) return;
+
+            // 兜底：Windows 版的 release 必须带 .exe 资产。
+            // 曾因仓库地址错写成 macOS 版（disk-write-monitor），mac 发 2.5.1 时这里误报了更新。
+            // 只要有资产却都不是 .exe，就当不是本平台的发布，直接忽略。
+            // 资产还没传完（空列表）时不做拦截，避免刚建 Release 的瞬间漏掉。
+            if (root.TryGetProperty("assets", out var assetsProp) && assetsProp.ValueKind == JsonValueKind.Array)
+            {
+                if (assetsProp.GetArrayLength() > 0)
+                {
+                    var hasExe = assetsProp.EnumerateArray().Any(a =>
+                        a.TryGetProperty("name", out var nameProp) &&
+                        (nameProp.GetString() ?? string.Empty)
+                            .EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
+                    if (!hasExe) return;
+                }
+            }
 
             var version = tag.StartsWith('v') ? tag[1..] : tag;
 

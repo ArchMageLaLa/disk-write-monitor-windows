@@ -27,6 +27,16 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // --check-update 是纯诊断模式：不占单实例位、不建界面、不采样，
+        // 这样程序正开着也能随时自查版本提示是否正确
+        var checkIndex = Array.IndexOf(e.Args, "--check-update");
+        if (checkIndex >= 0 && checkIndex + 1 < e.Args.Length)
+        {
+            _settings = AppSettings.Load();
+            CheckUpdateAndExit(e.Args[checkIndex + 1]);
+            return;
+        }
+
         // 单实例：第二个进程只负责把已有窗口叫到前台，然后自己退出
         _instanceMutex = new Mutex(true, @"Local\DiskWriteMonitor.Instance", out var isFirst);
         if (!isFirst)
@@ -135,6 +145,36 @@ public partial class App : Application
         _updater.CheckIfDue();
         _dailyTimer = new System.Threading.Timer(_ => _updater?.CheckIfDue(), null,
             TimeSpan.FromHours(1), TimeSpan.FromHours(1));
+    }
+
+    /// <summary>--check-update：立刻查一次更新并打印结果，用于验收版本提示条是否正确。</summary>
+    private void CheckUpdateAndExit(string path)
+    {
+        _ = Task.Run(async () =>
+        {
+            // 用真实配置查（否则读不到忽略版本），查完把检查时间还原，不影响正式运行的 24 小时节流
+            var settings = _settings!;
+            var before = settings.LastUpdateCheck;
+            var dismissed = settings.DismissedVersion;
+
+            var checker = new UpdateChecker(settings);
+            await checker.CheckAsync();
+
+            var lines = new List<string>
+            {
+                "current=" + UpdateChecker.CurrentVersion,
+                "available=" + (checker.Available?.Version ?? "(none)"),
+                "url=" + (checker.Available?.Url ?? "-"),
+                "showBanner=" + checker.ShouldShowBanner
+            };
+
+            settings.LastUpdateCheck = before;
+            settings.DismissedVersion = dismissed;
+            settings.Save();
+
+            try { System.IO.File.WriteAllLines(path, lines); } catch { }
+            Dispatcher.Invoke(() => Shutdown());
+        });
     }
 
     private void DumpRows(string path)
